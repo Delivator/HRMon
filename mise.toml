@@ -1,0 +1,13 @@
+[tools]
+python = "3.14"
+
+[env]
+_.python.venv = { path = ".venv", create = true }
+
+[tasks.install]
+description = "Install Python dependencies into the venv"
+run = "uv pip install -r requirements.txt"
+
+[tasks.run]
+description = "Start HRMon"
+run = "python -m hrmon"
