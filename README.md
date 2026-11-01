@@ -28,3 +28,18 @@ Bluetooth access goes straight through BlueZ over D-Bus, so there's no extra BLE
 - Hover over the graph to see the exact BPM at that moment.
 - The ☰ menu switches the time axis between *time ago*, *since start* and *time of day*.
 - `HRMON_DEMO=1 mise run run` shows the UI with fake data.
+
+## Stored data
+
+Everything HRMon remembers lives in one file: `~/.config/hrmon/config.json`
+(or `$XDG_CONFIG_HOME/hrmon/config.json`).
+
+| Key | Meaning |
+| --- | --- |
+| `device` | Bluetooth address of your strap, so it's preferred next time |
+| `window_minutes` | Selected graph range |
+| `time_axis` | Time axis mode: `ago`, `elapsed` or `clock` |
+| `resting` | Today's resting HR (`date` + `bpm`), only used if `date` is today |
+
+Heart rate readings themselves are kept in memory only (up to the last hour) and are
+gone when HRMon quits. Delete the file, or a single key, to reset that setting.
