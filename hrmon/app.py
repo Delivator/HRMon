@@ -11,7 +11,7 @@ import gi
 gi.require_version("Gtk", "4.0")
 gi.require_version("Adw", "1")
 gi.require_version("PangoCairo", "1.0")
-from gi.repository import Adw, Gdk, Gio, GLib, Gtk  # noqa: E402
+from gi.repository import Adw, Gdk, Gio, GLib, Gtk, Pango, PangoCairo  # noqa: E402
 
 from .graph import HeartRateGraph  # noqa: E402
 from .sensor import HeartRateSensor  # noqa: E402
@@ -23,7 +23,6 @@ WINDOWS = [1, 2, 5, 10, 15, 30, 60]  # minutes
 STALE_SECONDS = 5
 
 CSS = b"""
-.bpm { font-size: 64px; font-weight: 800; font-feature-settings: "tnum"; }
 .bpm-unit { font-size: 15px; font-weight: 600; }
 .heart { color: #e01b24; font-size: 26px; transition: opacity 120ms ease-out; }
 .heart.beat { opacity: 0.35; }
@@ -45,6 +44,53 @@ def save_config(cfg):
         print("Could not save config:", e, file=sys.stderr)
 
 
+class BigNumber(Gtk.DrawingArea):
+    """The big BPM number, drawn with cairo.
+
+    A plain Gtk.Label at this size goes through GTK's glyph atlas, which can show
+    stray lines and clipped glyph tops; drawing it ourselves avoids that.
+    """
+
+    SIZE_PX = 64
+
+    def __init__(self):
+        super().__init__()
+        self.text = "–"
+        self.set_draw_func(self._draw)
+        self._resize()
+
+    def set_label(self, text):
+        if text != self.text:
+            self.text = text
+            self._resize()
+            self.queue_draw()
+
+    def _layout(self, ctx_layout):
+        font = self.get_pango_context().get_font_description().copy()
+        font.set_absolute_size(self.SIZE_PX * Pango.SCALE)
+        font.set_weight(Pango.Weight.ULTRABOLD)
+        ctx_layout.set_font_description(font)
+        attrs = Pango.AttrList()
+        attrs.insert(Pango.attr_font_features_new("tnum"))
+        ctx_layout.set_attributes(attrs)
+        ctx_layout.set_text(self.text, -1)
+        return ctx_layout
+
+    def _resize(self):
+        layout = self._layout(self.create_pango_layout(None))
+        _ink, logical = layout.get_pixel_extents()
+        self.set_content_width(logical.width)
+        self.set_content_height(logical.height)
+
+    def _draw(self, _area, cr, width, height):
+        layout = self._layout(PangoCairo.create_layout(cr))
+        _ink, logical = layout.get_pixel_extents()
+        fg = self.get_color()
+        cr.set_source_rgba(fg.red, fg.green, fg.blue, fg.alpha)
+        cr.move_to((width - logical.width) / 2, (height - logical.height) / 2)
+        PangoCairo.show_layout(cr, layout)
+
+
 class MainWindow(Adw.ApplicationWindow):
     def __init__(self, app, window_minutes):
         super().__init__(application=app, title="HRMon", default_width=400, default_height=320)
@@ -59,10 +105,11 @@ class MainWindow(Adw.ApplicationWindow):
         self.range.add_css_class("flat")
         header.pack_start(self.range)
 
-        self.heart = Gtk.Label(label="♥", css_classes=["heart"], valign=Gtk.Align.BASELINE_FILL)
-        self.bpm = Gtk.Label(label="–", css_classes=["bpm"])
-        unit = Gtk.Label(label="bpm", css_classes=["bpm-unit", "dim-label"], valign=Gtk.Align.BASELINE_FILL)
-        value_row = Gtk.Box(spacing=8, halign=Gtk.Align.CENTER, baseline_position=Gtk.BaselinePosition.BOTTOM)
+        self.heart = Gtk.Label(label="♥", css_classes=["heart"], valign=Gtk.Align.END, margin_bottom=12)
+        self.bpm = BigNumber()
+        unit = Gtk.Label(label="bpm", css_classes=["bpm-unit", "dim-label"], valign=Gtk.Align.END,
+                         margin_bottom=14)
+        value_row = Gtk.Box(spacing=8, halign=Gtk.Align.CENTER)
         for w in (self.heart, self.bpm, unit):
             value_row.append(w)
 
@@ -94,7 +141,7 @@ class MainWindow(Adw.ApplicationWindow):
 
 class HRMonApp(Adw.Application):
     def __init__(self):
-        super().__init__(application_id=APP_ID)
+        super().__init__(application_id=APP_ID + (".Demo" if os.environ.get("HRMON_DEMO") else ""))
         GLib.set_prgname(APP_ID)
         Gtk.Window.set_default_icon_name(APP_ID)
         self.cfg = load_config()
@@ -103,6 +150,7 @@ class HRMonApp(Adw.Application):
         self.sensor = None
         self.last_bpm = None
         self.last_time = 0.0
+        self._beat_id = 0
 
     def do_startup(self):
         Adw.Application.do_startup(self)
@@ -169,7 +217,6 @@ class HRMonApp(Adw.Application):
     def _on_heart_rate(self, _sensor, bpm):
         self.last_bpm, self.last_time = bpm, time.monotonic()
         self.window.graph.add(bpm)
-        self.window.beat()
         self._refresh()
 
     def _tick(self):
@@ -177,9 +224,27 @@ class HRMonApp(Adw.Application):
         self._refresh()
         return GLib.SOURCE_CONTINUE
 
-    def _refresh(self):
-        live = (self.sensor.state == "connected" and self.last_bpm is not None
+    def _is_live(self):
+        return (self.sensor.state == "connected" and self.last_bpm is not None
                 and time.monotonic() - self.last_time < STALE_SECONDS)
+
+    def _schedule_beat(self):
+        """Pulse the heart at the current BPM (free-running, not tied to sensor updates)."""
+        if self._beat_id or not self._is_live():
+            return
+
+        def beat():
+            self._beat_id = 0
+            if self._is_live():
+                self.window.beat()
+                self._schedule_beat()
+            return GLib.SOURCE_REMOVE
+
+        self._beat_id = GLib.timeout_add(round(60000 / self.last_bpm), beat)
+
+    def _refresh(self):
+        live = self._is_live()
+        self._schedule_beat()
         w = self.window
         w.bpm.set_label(str(self.last_bpm) if self.last_bpm else "–")
         if live:
