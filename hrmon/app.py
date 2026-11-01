@@ -4,6 +4,7 @@ import json
 import os
 import sys
 import time
+from datetime import date
 from pathlib import Path
 
 import gi
@@ -14,6 +15,7 @@ gi.require_version("PangoCairo", "1.0")
 from gi.repository import Adw, Gdk, Gio, GLib, Gtk, Pango, PangoCairo  # noqa: E402
 
 from .graph import HeartRateGraph  # noqa: E402
+from .resting import RestingHeartRate  # noqa: E402
 from .sensor import HeartRateSensor  # noqa: E402
 from .tray import TrayIcon  # noqa: E402
 
@@ -37,6 +39,8 @@ def load_config():
 
 
 def save_config(cfg):
+    if os.environ.get("HRMON_DEMO"):  # never let fake data touch the real config
+        return
     try:
         CONFIG.parent.mkdir(parents=True, exist_ok=True)
         CONFIG.write_text(json.dumps(cfg, indent=2))
@@ -113,7 +117,9 @@ class MainWindow(Adw.ApplicationWindow):
         for w in (self.heart, self.bpm, unit):
             value_row.append(w)
 
+        self.resting = None
         self.stats = Gtk.Label(label=" ", css_classes=["dim-label", "caption"])
+        self.stats.set_tooltip_text("Resting: lowest 3-minute average today")
         self.graph = HeartRateGraph(minutes * 60)
 
         content = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4,
@@ -127,12 +133,14 @@ class MainWindow(Adw.ApplicationWindow):
         self.set_content(view)
 
     def update_stats(self):
+        parts = []
+        if self.resting:
+            parts.append(f"resting {self.resting}")
         values = [v for _, v in self.graph.visible()]
         if values:
             avg = round(sum(values) / len(values))
-            self.stats.set_label(f"min {min(values)}  ·  avg {avg}  ·  max {max(values)}")
-        else:
-            self.stats.set_label(" ")
+            parts += [f"min {min(values)}", f"avg {avg}", f"max {max(values)}"]
+        self.stats.set_label("  ·  ".join(parts) or " ")
 
     def beat(self):
         self.heart.add_css_class("beat")
@@ -151,6 +159,10 @@ class HRMonApp(Adw.Application):
         self.last_bpm = None
         self.last_time = 0.0
         self._beat_id = 0
+        saved = self.cfg.get("resting", {})
+        today = date.today().isoformat()
+        self.resting = RestingHeartRate(saved.get("bpm") if saved.get("date") == today else None)
+        self.resting_date = today
 
     def do_startup(self):
         Adw.Application.do_startup(self)
@@ -166,6 +178,7 @@ class HRMonApp(Adw.Application):
 
         self.window = MainWindow(self, self.cfg.get("window_minutes", 5))
         self.window.range.connect("notify::selected", self._on_range_changed)
+        self.window.resting = self.window.graph.resting = self.resting.value
 
         try:
             self.tray = TrayIcon(self.toggle_window, self.quit_app)
@@ -217,7 +230,18 @@ class HRMonApp(Adw.Application):
     def _on_heart_rate(self, _sensor, bpm):
         self.last_bpm, self.last_time = bpm, time.monotonic()
         self.window.graph.add(bpm)
+        self._update_resting(bpm)
         self._refresh()
+
+    def _update_resting(self, bpm):
+        today = date.today().isoformat()
+        if today != self.resting_date:  # new day, new resting HR
+            self.resting, self.resting_date = RestingHeartRate(), today
+        if self.resting.add(self.last_time, bpm):
+            self.cfg["resting"] = {"date": today, "bpm": self.resting.value}
+            save_config(self.cfg)
+        self.window.resting = self.resting.value
+        self.window.graph.resting = self.resting.value
 
     def _tick(self):
         self.window.graph.queue_draw()
