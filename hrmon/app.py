@@ -189,7 +189,7 @@ class HRMonApp(Adw.Application):
 
         self.window = MainWindow(self, self.cfg.get("window_minutes", 5))
         self.window.range.connect("notify::selected", self._on_range_changed)
-        self.window.resting = self.window.graph.resting = self.resting.value
+        self.window.resting = self.resting.value
 
         mode = self.cfg.get("time_axis", "ago")
         self.window.graph.set_time_mode(mode)
@@ -254,8 +254,8 @@ class HRMonApp(Adw.Application):
 
     def _on_heart_rate(self, _sensor, bpm):
         self.last_bpm, self.last_time = bpm, time.monotonic()
-        self.window.graph.add(bpm)
         self._update_resting(bpm)
+        self.window.graph.add(bpm, self.resting.value)
         self._refresh()
 
     def _update_resting(self, bpm):
@@ -266,7 +266,6 @@ class HRMonApp(Adw.Application):
             self.cfg["resting"] = {"date": today, "bpm": self.resting.value}
             save_config(self.cfg)
         self.window.resting = self.resting.value
-        self.window.graph.resting = self.resting.value
 
     def _tick(self):
         self.window.graph.queue_draw()

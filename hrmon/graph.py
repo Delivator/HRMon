@@ -33,8 +33,7 @@ class HeartRateGraph(Gtk.DrawingArea):
         super().__init__(hexpand=True, vexpand=True)
         self.set_size_request(260, 120)
         self.window_seconds = window_seconds
-        self.samples = deque()  # (monotonic time, bpm)
-        self.resting = None
+        self.samples = deque()  # (monotonic time, bpm, resting bpm or None)
         self.hover_x = None
         self.time_mode = "ago"
         self.start_time = time.monotonic()
@@ -53,9 +52,9 @@ class HeartRateGraph(Gtk.DrawingArea):
         self.hover_x = None
         self.queue_draw()
 
-    def add(self, bpm: int):
+    def add(self, bpm: int, resting: int | None = None):
         now = time.monotonic()
-        self.samples.append((now, bpm))
+        self.samples.append((now, bpm, resting))
         while self.samples and now - self.samples[0][0] > HISTORY_SECONDS:
             self.samples.popleft()
         self.queue_draw()
@@ -96,15 +95,20 @@ class HeartRateGraph(Gtk.DrawingArea):
 
     def visible(self):
         start = time.monotonic() - self.window_seconds
-        return [(t, v) for t, v in self.samples if t >= start]
+        return [(t, v) for t, v, _r in self.samples if t >= start]
+
+    def _visible_resting(self):
+        start = time.monotonic() - self.window_seconds
+        return [(t, r) for t, _v, r in self.samples if t >= start and r]
 
     def _draw(self, _area, cr, width, height):
         fg = self.get_color()
         pts = self.visible()
+        rest_pts = self._visible_resting()
         now = time.monotonic()
 
         if pts:
-            values = [v for _, v in pts]
+            values = [v for _, v in pts] + [r for _, r in rest_pts]
             lo = math.floor((min(values) - 5) / 10) * 10
             hi = math.ceil((max(values) + 5) / 10) * 10
         else:
@@ -148,13 +152,20 @@ class HeartRateGraph(Gtk.DrawingArea):
         if not pts:
             return
 
-        # resting heart rate as a subtle dashed line
-        if self.resting and lo < self.resting < hi:
-            y = round(y_of(self.resting)) + 0.5
-            cr.set_source_rgba(fg.red, fg.green, fg.blue, 0.35)
+        # resting heart rate over time: a subtle dashed step line
+        if rest_pts:
+            cr.set_source_rgba(fg.red, fg.green, fg.blue, 0.4)
+            cr.set_line_width(1)
             cr.set_dash([4, 4])
-            cr.move_to(left, y)
-            cr.line_to(width - right, y)
+            prev = None
+            for t, r in rest_pts:
+                x, y = x_of(t), round(y_of(r)) + 0.5
+                if prev is None or t - prev[0] > GAP_SECONDS:
+                    cr.move_to(x, y)
+                else:
+                    cr.line_to(x, round(y_of(prev[1])) + 0.5)  # hold the old value, then step
+                    cr.line_to(x, y)
+                prev = (t, r)
             cr.stroke()
             cr.set_dash([])
 
@@ -206,7 +217,8 @@ class HeartRateGraph(Gtk.DrawingArea):
             cr.fill()
 
         if self.hover_x is not None and left <= self.hover_x <= width - right:
-            self._draw_hover(cr, pts, now, x_of, y_of, layout, fg, top, gh, left, width - right)
+            self._draw_hover(cr, pts, dict(rest_pts), now, x_of, y_of, layout, fg, top, gh,
+                             left, width - right)
 
     def _draw_time_axis(self, cr, layout, fg, now, x_of, x_min, x_max, y_axis):
         # about one tick per 70px, rounded up to a "nice" step
@@ -236,7 +248,7 @@ class HeartRateGraph(Gtk.DrawingArea):
             cr.move_to(lx, y_axis + 4)
             PangoCairo.show_layout(cr, layout)
 
-    def _draw_hover(self, cr, pts, now, x_of, y_of, layout, fg, top, gh, x_min, x_max):
+    def _draw_hover(self, cr, pts, rest_at, now, x_of, y_of, layout, fg, top, gh, x_min, x_max):
         t_hover = now - self.window_seconds * (1 - (self.hover_x - x_min) / (x_max - x_min))
         t, bpm = min(pts, key=lambda p: abs(p[0] - t_hover))
         if abs(t - t_hover) > GAP_SECONDS:
@@ -248,11 +260,19 @@ class HeartRateGraph(Gtk.DrawingArea):
         cr.move_to(round(x) + 0.5, top)
         cr.line_to(round(x) + 0.5, top + gh)
         cr.stroke()
+        rest = rest_at.get(t)
+        if rest:
+            cr.set_source_rgba(fg.red, fg.green, fg.blue, 0.8)
+            cr.arc(x, y_of(rest), 3, 0, 2 * math.pi)
+            cr.fill()
         cr.set_source_rgb(*LINE)
         cr.arc(x, y, 4, 0, 2 * math.pi)
         cr.fill()
 
-        layout.set_markup(f"<b>{bpm} bpm</b>  {self.format_time(t, now)}", -1)
+        markup = f"<b>{bpm} bpm</b>  {self.format_time(t, now)}"
+        if rest:
+            markup += f"\n<span alpha='70%'>resting {rest}</span>"
+        layout.set_markup(markup, -1)
         tw, th = layout.get_pixel_size()
         pad = 5
         bw, bh = tw + 2 * pad, th + 2 * pad
