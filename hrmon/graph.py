@@ -2,6 +2,7 @@
 
 import math
 import time
+from datetime import datetime
 from collections import deque
 
 import cairo
@@ -18,7 +19,22 @@ class HeartRateGraph(Gtk.DrawingArea):
         self.set_size_request(260, 120)
         self.window_seconds = window_seconds
         self.samples = deque()  # (monotonic time, bpm)
+        self.resting = None
+        self.hover_x = None
         self.set_draw_func(self._draw)
+
+        motion = Gtk.EventControllerMotion()
+        motion.connect("motion", self._on_motion)
+        motion.connect("leave", self._on_leave)
+        self.add_controller(motion)
+
+    def _on_motion(self, _ctl, x, _y):
+        self.hover_x = x
+        self.queue_draw()
+
+    def _on_leave(self, _ctl):
+        self.hover_x = None
+        self.queue_draw()
 
     def add(self, bpm: int):
         now = time.monotonic()
@@ -80,6 +96,16 @@ class HeartRateGraph(Gtk.DrawingArea):
         if not pts:
             return
 
+        # resting heart rate as a subtle dashed line
+        if self.resting and lo < self.resting < hi:
+            y = round(y_of(self.resting)) + 0.5
+            cr.set_source_rgba(fg.red, fg.green, fg.blue, 0.35)
+            cr.set_dash([4, 4])
+            cr.move_to(left, y)
+            cr.line_to(width - right, y)
+            cr.stroke()
+            cr.set_dash([])
+
         # split into continuous segments
         segments, seg = [], []
         for i, (t, v) in enumerate(pts):
@@ -126,3 +152,42 @@ class HeartRateGraph(Gtk.DrawingArea):
             cr.set_source_rgb(*LINE)
             cr.arc(x, y, 3.5, 0, 2 * math.pi)
             cr.fill()
+
+        if self.hover_x is not None and left <= self.hover_x <= width - right:
+            self._draw_hover(cr, pts, now, x_of, y_of, layout, fg, top, gh, left, width - right)
+
+    def _draw_hover(self, cr, pts, now, x_of, y_of, layout, fg, top, gh, x_min, x_max):
+        t_hover = now - self.window_seconds * (1 - (self.hover_x - x_min) / (x_max - x_min))
+        t, bpm = min(pts, key=lambda p: abs(p[0] - t_hover))
+        if abs(t - t_hover) > GAP_SECONDS:
+            return  # nothing recorded near the cursor
+        x, y = x_of(t), y_of(bpm)
+
+        cr.set_source_rgba(fg.red, fg.green, fg.blue, 0.4)
+        cr.set_line_width(1)
+        cr.move_to(round(x) + 0.5, top)
+        cr.line_to(round(x) + 0.5, top + gh)
+        cr.stroke()
+        cr.set_source_rgb(*LINE)
+        cr.arc(x, y, 4, 0, 2 * math.pi)
+        cr.fill()
+
+        clock = datetime.fromtimestamp(time.time() - (now - t)).strftime("%H:%M:%S")
+        layout.set_markup(f"<b>{bpm} bpm</b>  {clock}", -1)
+        tw, th = layout.get_pixel_size()
+        pad = 5
+        bw, bh = tw + 2 * pad, th + 2 * pad
+        bx = x + 8 if x + 8 + bw <= x_max else x - 8 - bw
+        by = min(max(y - bh - 8, top), top + gh - bh)
+        cr.set_source_rgba(0.12, 0.12, 0.14, 0.92)
+        r = 5
+        cr.new_sub_path()
+        cr.arc(bx + bw - r, by + r, r, -math.pi / 2, 0)
+        cr.arc(bx + bw - r, by + bh - r, r, 0, math.pi / 2)
+        cr.arc(bx + r, by + bh - r, r, math.pi / 2, math.pi)
+        cr.arc(bx + r, by + r, r, math.pi, 3 * math.pi / 2)
+        cr.close_path()
+        cr.fill()
+        cr.set_source_rgb(1, 1, 1)
+        cr.move_to(bx + pad, by + pad)
+        PangoCairo.show_layout(cr, layout)
