@@ -19,7 +19,7 @@ from .resting import RestingHeartRate  # noqa: E402
 from .sensor import HeartRateSensor  # noqa: E402
 from .tray import TrayIcon  # noqa: E402
 
-APP_ID = "io.github.hrmon.HRMon"
+APP_ID = "io.github.Delivator.HRMon"
 CONFIG = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) / "hrmon" / "config.json"
 WINDOWS = [1, 2, 5, 10, 15, 30, 60]  # minutes
 STALE_SECONDS = 5
