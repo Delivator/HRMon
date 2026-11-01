@@ -229,6 +229,7 @@ class HRMonApp(Adw.Application):
             self.window.present()
 
     def quit_app(self):
+        self.window.set_visible(False)
         self.sensor.stop()
         self.quit()
 

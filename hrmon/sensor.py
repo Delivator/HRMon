@@ -216,10 +216,14 @@ class HeartRateSensor(GObject.Object):
     def stop(self):
         """Disconnect so the strap is free for other devices (e.g. a phone)."""
         self._stop_discovery()
-        if self.device and self.state == "connected":
+        if self.device and self.state in ("connected", "connecting"):
+            # Fire and forget: BlueZ only replies once the link is fully torn down, which
+            # can take seconds. It finishes the disconnect even after we've exited.
+            msg = Gio.DBusMessage.new_method_call(BLUEZ, self.device, DEVICE, "Disconnect")
+            msg.set_flags(Gio.DBusMessageFlags.NO_REPLY_EXPECTED)
             try:
-                self.bus.call_sync(BLUEZ, self.device, DEVICE, "Disconnect", None, None,
-                                   Gio.DBusCallFlags.NONE, 2000, None)
+                self.bus.send_message(msg, Gio.DBusSendMessageFlags.NONE)
+                self.bus.flush_sync(None)
             except GLib.Error:
                 pass
 
