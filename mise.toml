@@ -11,3 +11,7 @@ run = "uv pip install -r requirements.txt"
 [tasks.run]
 description = "Start HRMon"
 run = "python -m hrmon"
+
+[tasks.desktop]
+description = "Add HRMon to the app launcher"
+run = "sh data/install-desktop.sh"

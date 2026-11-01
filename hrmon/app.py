@@ -95,6 +95,8 @@ class MainWindow(Adw.ApplicationWindow):
 class HRMonApp(Adw.Application):
     def __init__(self):
         super().__init__(application_id=APP_ID)
+        GLib.set_prgname(APP_ID)
+        Gtk.Window.set_default_icon_name(APP_ID)
         self.cfg = load_config()
         self.window = None
         self.tray = None
