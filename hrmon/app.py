@@ -109,6 +109,17 @@ class MainWindow(Adw.ApplicationWindow):
         self.range.add_css_class("flat")
         header.pack_start(self.range)
 
+        menu = Gio.Menu()
+        axis = Gio.Menu()
+        for label, mode in (("Time ago", "ago"), ("Since start", "elapsed"), ("Time of day", "clock")):
+            axis.append(label, f"app.time-axis::{mode}")
+        menu.append_section("Time axis", axis)
+        app_section = Gio.Menu()
+        app_section.append("Quit", "app.quit")
+        menu.append_section(None, app_section)
+        header.pack_end(Gtk.MenuButton(icon_name="open-menu-symbolic", menu_model=menu,
+                                       tooltip_text="Settings"))
+
         self.heart = Gtk.Label(label="♥", css_classes=["heart"], valign=Gtk.Align.END, margin_bottom=12)
         self.bpm = BigNumber()
         unit = Gtk.Label(label="bpm", css_classes=["bpm-unit", "dim-label"], valign=Gtk.Align.END,
@@ -180,6 +191,13 @@ class HRMonApp(Adw.Application):
         self.window.range.connect("notify::selected", self._on_range_changed)
         self.window.resting = self.window.graph.resting = self.resting.value
 
+        mode = self.cfg.get("time_axis", "ago")
+        self.window.graph.set_time_mode(mode)
+        axis_action = Gio.SimpleAction.new_stateful(
+            "time-axis", GLib.VariantType.new("s"), GLib.Variant("s", self.window.graph.time_mode))
+        axis_action.connect("change-state", self._on_time_axis_changed)
+        self.add_action(axis_action)
+
         try:
             self.tray = TrayIcon(self.toggle_window, self.quit_app)
             # with a tray icon, closing the window just hides it
@@ -220,6 +238,12 @@ class HRMonApp(Adw.Application):
         self.window.graph.set_window(minutes * 60)
         self.window.update_stats()
         self.cfg["window_minutes"] = minutes
+        save_config(self.cfg)
+
+    def _on_time_axis_changed(self, action, value):
+        action.set_state(value)
+        self.window.graph.set_time_mode(value.get_string())
+        self.cfg["time_axis"] = value.get_string()
         save_config(self.cfg)
 
     def _on_device_found(self, _sensor, address, _name):
