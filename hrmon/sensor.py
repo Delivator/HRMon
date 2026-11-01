@@ -56,6 +56,21 @@ class HeartRateSensor(GObject.Object):
                                   flags, self._on_properties_changed)
         self.bus.signal_subscribe(BLUEZ, OBJ_MANAGER, "InterfacesAdded", None, None,
                                   flags, self._on_interfaces_added)
+        # bluetoothd can restart (or crash); all our state is gone then, so start over
+        Gio.bus_watch_name_on_connection(self.bus, BLUEZ, Gio.BusNameWatcherFlags.NONE,
+                                         self._on_bluez_appeared, self._on_bluez_vanished)
+        self._bluez_seen = False
+
+    def _on_bluez_appeared(self, *_):
+        if self._bluez_seen:  # skip the initial callback, start() is called by the app
+            self._schedule_restart(1)
+        self._bluez_seen = True
+
+    def _on_bluez_vanished(self, *_):
+        self._bluez_seen = True
+        self._discovering = False
+        self.char = None
+        self._set_state("error", "Bluetooth service not running")
 
     # ------------------------------------------------------------------ helpers
     def _set_state(self, state: str, message: str = ""):
